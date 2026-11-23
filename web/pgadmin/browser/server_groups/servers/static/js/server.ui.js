@@ -630,8 +630,14 @@ export default class ServerSchema extends BaseUISchema {
           if (obj.isShared(state)) {
             options.unshift({label: gettext('Inherit from owner'), value: '__inherit__'});
           }
-          (pgAdmin.server_passexec_commands || []).forEach((name) => {
-            options.push({label: name, value: name});
+          // Command names, and built-in choices such as AWS IAM
+          // authentication given as {value, label}.
+          (pgAdmin.server_passexec_commands || []).forEach((cmd) => {
+            if (typeof cmd === 'string') {
+              options.push({label: cmd, value: cmd});
+            } else if (cmd?.value) {
+              options.push({label: cmd.label || cmd.value, value: cmd.value});
+            }
           });
           return {type: 'select', options: options};
         },
@@ -645,8 +651,10 @@ export default class ServerSchema extends BaseUISchema {
           (pgAdmin.server_passexec_commands || []).length > 0,
         disabled: function(state) {
           if (pgAdmin.server_mode == 'True') {
+            // AWS IAM tokens manage their own lifetime.
             return !state.passexec_name ||
-              ['__none__', '__inherit__'].includes(state.passexec_name);
+              ['__none__', '__inherit__'].includes(state.passexec_name) ||
+              String(state.passexec_name).startsWith('__aws_iam__');
           }
           return isEmptyString(state.passexec_cmd);
         },

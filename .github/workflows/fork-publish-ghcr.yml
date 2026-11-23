@@ -1,0 +1,149 @@
+# Builds the container image of a fork branch and publishes it, with the
+# Helm chart (pkg/helm) pointing at it, to the GitHub Container Registry of
+# the repository owner:
+#
+#   image: ghcr.io/<owner>/pgadmin4:<chart appVersion>-aws.<run>
+#   chart: oci://ghcr.io/<owner>/charts/pgadmin4-helm --version <same>
+#
+# Never runs in pgadmin-org/pgadmin4, which publishes through
+# check-container-build.yml and promote-release.yml.
+
+name: Publish fork image and chart to GHCR
+
+on:
+  push:
+    branches:
+      - 'feature/aws-iam-web-identity'
+      - 'aws-iam/**'
+    paths-ignore:
+      - 'docs/**'
+      - '**.md'
+  workflow_dispatch:
+    inputs:
+      platforms:
+        description: 'Image platforms (comma separated)'
+        default: 'linux/amd64'
+        required: true
+
+concurrency:
+  group: 'fork-publish-ghcr @ ${{ github.ref }}'
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  version:
+    if: ${{ github.repository != 'pgadmin-org/pgadmin4' }}
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      owner: ${{ steps.version.outputs.owner }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Work out the version
+        id: version
+        env:
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          set -euo pipefail
+          base=$(awk '/^appVersion:/ {print $2}' pkg/helm/Chart.yaml | tr -d '"')
+          echo "version=${base}-aws.${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+          echo "owner=${OWNER,,}" >> "$GITHUB_OUTPUT"
+
+  image:
+    needs: version
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    env:
+      IMAGE: ghcr.io/${{ needs.version.outputs.owner }}/pgadmin4
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 2
+
+      - name: Set up QEMU
+        if: ${{ contains(inputs.platforms || 'linux/amd64', 'arm64') }}
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130  # v3
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f  # v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9  # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Work out the tags
+        id: tags
+        run: |
+          set -euo pipefail
+          branch=$(printf '%s' "${GITHUB_REF_NAME}" | tr -c 'A-Za-z0-9_.-' '-' | cut -c1-100)
+          {
+            echo "tags<<EOF"
+            echo "${IMAGE}:${VERSION}"
+            echo "${IMAGE}:sha-${GITHUB_SHA::7}"
+            echo "${IMAGE}:${branch}"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Build and push the container
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc  # v7.4.0
+        with:
+          context: .
+          push: true
+          platforms: ${{ inputs.platforms || 'linux/amd64' }}
+          tags: ${{ steps.tags.outputs.tags }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ needs.version.outputs.version }}
+            org.opencontainers.image.description=pgAdmin 4 with AWS IAM web identity authentication (fork build)
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  chart:
+    needs: [version, image]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    env:
+      OWNER: ${{ needs.version.outputs.owner }}
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Helm
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/helm/helm/v4.3.0/scripts/get-helm-3 -o get-helm-3
+          chmod 700 get-helm-3
+          ./get-helm-3
+
+      - name: Point the chart at the fork image
+        run: |
+          set -euo pipefail
+          sed -i -E "s/^version: .*/version: ${VERSION}/; s/^appVersion: .*/appVersion: ${VERSION}/" pkg/helm/Chart.yaml
+          sed -i -E "s#^  registry: docker.io#  registry: ghcr.io#; s#^  repository: dpage/pgadmin4#  repository: ${OWNER}/pgadmin4#" pkg/helm/values.yaml
+          grep -E '^(version|appVersion):' pkg/helm/Chart.yaml
+          grep -A3 '^image:' pkg/helm/values.yaml
+
+      - name: Lint and package the chart
+        run: |
+          helm lint pkg/helm
+          helm package pkg/helm
+
+      - name: Push the chart
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          printf '%s' "${GH_TOKEN}" | helm registry login ghcr.io -u "${GITHUB_ACTOR}" --password-stdin
+          helm push pgadmin4-helm-*.tgz "oci://ghcr.io/${OWNER}/charts"
+          helm registry logout ghcr.io

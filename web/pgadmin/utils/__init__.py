@@ -1325,13 +1325,13 @@ def _load_server_passexec(new_server, obj):
     where it must be the name of a configured command. Anything else
     is ignored with a warning that names the server only, as the text
     could be a secret."""
-    from pgadmin.utils.passexec import get_server_passexec_commands
+    from pgadmin.utils.passexec import is_known_passexec_name
 
     name = obj.get("PasswordExecCommand", None)
     if not name:
         return
 
-    if isinstance(name, str) and name in get_server_passexec_commands():
+    if is_known_passexec_name(name):
         new_server.passexec_name = name
         new_server.passexec_expiration = obj.get(
             "PasswordExecExpiration", None)

@@ -42,6 +42,7 @@ Mode is pre-configured for security.
    kerberos
    oauth2
    webserver
+   aws_iam_authentication
 
 
 .. note:: Pre-compiled and configured installation packages are available for

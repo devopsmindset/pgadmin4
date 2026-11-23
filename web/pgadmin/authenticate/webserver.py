@@ -25,7 +25,11 @@ from pgadmin.utils.constants import WEBSERVER
 from pgadmin.utils import PgAdminModule
 from pgadmin.utils.csrf import pgCSRFProtect
 from flask_security.utils import logout_user
+from flask_security import current_user
 from pgadmin.utils.master_password import set_crypt_key
+from pgadmin.utils.jwt_identity import JWTIdentityError, forget_token, \
+    identity_from_request, jwt_mode_enabled, remember_token
+from pgadmin.utils.aws_iam import SESSION_KEY as AWS_IAM_ROLE_SESSION_KEY
 
 
 def _is_cgi_var_name(name):
@@ -183,6 +187,65 @@ def _get_header_value(name):
     return request.headers.get(_header_name_for(name))
 
 
+def _get_jwt_identity():
+    """(username, claims) from a verified WEBSERVER_JWT_HEADER token, or
+    None. The token is remembered for the session so that it can later be
+    exchanged for AWS credentials."""
+    try:
+        identity = identity_from_request()
+    except JWTIdentityError as e:
+        # Client-triggerable, so info rather than warning (see above).
+        current_app.logger.info(
+            "Webserver auth: rejecting the identity token: {0}".format(e))
+        return None
+    if identity is None:
+        return None
+    username, claims, token = identity
+    remember_token(username, claims, token)
+    return username, claims
+
+
+def _sync_jwt_session():
+    """Before each request of a JWT-authenticated session, check the token
+    the proxy sends now. A token for someone else, or an invalid one, logs
+    the session out (the request then continues unauthenticated and gets
+    the usual login redirect or 401); a valid one replaces the remembered
+    token, so the one exchanged for AWS credentials is always fresh."""
+    if not config.SERVER_MODE or not jwt_mode_enabled():
+        return
+    endpoint = request.endpoint or ''
+    if endpoint == 'static' or endpoint.endswith('.static'):
+        return
+    if not current_user or not current_user.is_authenticated:
+        return
+    if (session.get('auth_source_manager') or {}).get(
+            'current_source') != WEBSERVER:
+        return
+    try:
+        identity = identity_from_request()
+    except JWTIdentityError as e:
+        current_app.logger.info(
+            "Webserver auth: the identity token of the session of {0} is "
+            "invalid ({1}); logging the session out.".format(
+                current_user.username, e))
+        identity = False
+    if identity is None:
+        # Nothing sent with this request: keep the session; the remembered
+        # token simply ages out.
+        return
+    if identity is False or identity[0] != current_user.username:
+        if identity:
+            current_app.logger.warning(
+                "Webserver auth: the proxy now asserts {0} for the session "
+                "of {1}; logging the session out.".format(
+                    identity[0], current_user.username))
+        forget_token()
+        session.pop(AWS_IAM_ROLE_SESSION_KEY, None)
+        logout_user()
+        return
+    remember_token(*identity)
+
+
 class WebserverModule(PgAdminModule):
     def register(self, app, options):
         # Do not look for the sub_modules,
@@ -212,12 +275,15 @@ def init_app(app):
                      endpoint="logout", methods=["GET"])
     @pgCSRFProtect.exempt
     def webserver_logout():
+        forget_token()
+        session.pop(AWS_IAM_ROLE_SESSION_KEY, None)
         logout_user()
         return Response(render_template("browser/kerberos_logout.html",
                                         login_url=url_for('security.login'),
                                         ))
 
     app.register_blueprint(blueprint)
+    app.before_request(_sync_jwt_session)
 
 
 class WebserverAuthentication(BaseAuthentication):
@@ -234,6 +300,9 @@ class WebserverAuthentication(BaseAuthentication):
         return True, None
 
     def get_user(self):
+        if jwt_mode_enabled():
+            identity = _get_jwt_identity()
+            return identity[0] if identity else None
         username = _get_trusted_value(config.WEBSERVER_REMOTE_USER)
         if not username:
             # Gated fallback: only for deployments that have explicitly
@@ -243,7 +312,15 @@ class WebserverAuthentication(BaseAuthentication):
         return username
 
     def authenticate(self, form):
-        username = self.get_user()
+        useremail = ''
+        if jwt_mode_enabled():
+            identity = _get_jwt_identity()
+            username = identity[0] if identity else None
+            email = identity[1].get('email') if identity else None
+            if isinstance(email, str) and '@' in email:
+                useremail = email
+        else:
+            username = self.get_user()
 
         if not username:
             return False, gettext(
@@ -251,11 +328,10 @@ class WebserverAuthentication(BaseAuthentication):
 
         session['pass_enc_key'] = ''.join(
             (secrets.choice(string.ascii_lowercase) for _ in range(10)))
+        # A fresh login chooses its AWS role again.
+        session.pop(AWS_IAM_ROLE_SESSION_KEY, None)
 
-        useremail = _get_trusted_value('mail')
-        if not useremail:
-            useremail = ''
-        return self.__auto_create_user(username, '')
+        return self.__auto_create_user(username, useremail)
 
     def login(self, form):
         username = self.get_user()

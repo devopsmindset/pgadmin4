@@ -1034,6 +1034,39 @@ WEBSERVER_TRUSTED_PROXIES = []
 WEBSERVER_SHARED_SECRET = None
 WEBSERVER_SHARED_SECRET_HEADER = 'X-Pgadmin-Webserver-Secret'
 
+# Signed identity tokens (JWT) from the proxy in front of pgAdmin.
+#
+# When WEBSERVER_JWT_HEADER is set, Webserver authentication takes the user's
+# identity from a signed JWT in that request header instead of a plain user
+# name, for example the Cloudflare Access assertion (Cf-Access-Jwt-Assertion),
+# or the token an identity-aware proxy such as Ory Oathkeeper passes in the
+# Authorization header ("Bearer " is stripped). The signature, issuer,
+# audience and expiry are always checked, so the trusted proxy settings above
+# are not needed for this mode. The header is checked again on every request:
+# a token for a different user logs the session out, so the pgAdmin session
+# always belongs to the identity the proxy currently asserts. The verified
+# token is also what AWS_IAM_* (below) exchanges for AWS credentials.
+#
+# WEBSERVER_JWT_JWKS_URL is where the signing keys are fetched. When it is
+# None, it is discovered from the issuer's
+# /.well-known/openid-configuration document.
+#
+# WEBSERVER_JWT_USERNAME_SUFFIX is appended to the user name claim when the
+# value has no '@', e.g. '@example.com' turns 'jdoe' into
+# 'jdoe@example.com'. User names in WEBSERVER_JWT_DENY_USERNAMES (compared
+# before the suffix is added) are refused, for example the subject a proxy
+# uses for anonymous requests.
+WEBSERVER_JWT_HEADER = None
+WEBSERVER_JWT_ISSUER = None
+WEBSERVER_JWT_AUDIENCE = []
+WEBSERVER_JWT_JWKS_URL = None
+WEBSERVER_JWT_ALGORITHMS = ['RS256', 'ES256']
+WEBSERVER_JWT_USERNAME_CLAIM = 'email'
+WEBSERVER_JWT_USERNAME_SUFFIX = ''
+WEBSERVER_JWT_DENY_USERNAMES = ['anonymous']
+WEBSERVER_JWT_LEEWAY = 30
+WEBSERVER_JWT_JWKS_CACHE_SECONDS = 3600
+
 ##########################################################################
 # Two-factor Authentication Configuration
 ##########################################################################
@@ -1175,6 +1208,61 @@ SERVER_PASSEXEC_COMMANDS = {}
 # not need. This setting is applicable only for server mode.
 #############################################################################
 SERVER_PASSEXEC_ENV_PASSTHROUGH = []
+
+#############################################################################
+# AWS IAM database authentication with the user's own AWS identity.
+#
+# Server mode only. When enabled, the identity token of the pgAdmin login
+# (the verified WEBSERVER_JWT_HEADER token, or the OAuth2 ID token) is
+# exchanged with STS AssumeRoleWithWebIdentity for temporary credentials of
+# an IAM role, and those credentials sign RDS/Aurora IAM authentication
+# tokens. pgAdmin itself needs no AWS credentials: what each user can reach
+# is decided by the trust and permission policies of the roles.
+#
+# AWS_IAM_ROLES lists the roles users may choose from. Each entry is a dict:
+#
+#   'id'           (required) a short stable identifier, e.g. 'billing-ro'
+#   'arn'          (required) the IAM role ARN
+#   'label'        name shown in the role selector (defaults to the id)
+#   'description'  optional text shown under the label
+#   'region'       optional default AWS region for databases used with it
+#   'claim_values' optional list: the role is only offered when the token
+#                  claim named by AWS_IAM_ROLE_CLAIM contains one of these
+#
+# e.g.
+#   AWS_IAM_ROLES = [
+#       {'id': 'billing-ro', 'label': 'Billing (read only)',
+#        'arn': 'arn:aws:iam::111111111111:role/billing-db-ro',
+#        'claim_values': ['billing-readers']},
+#   ]
+#
+# After login, a user with more than one usable role picks one in the role
+# selector (also reachable from the user menu); with exactly one it is
+# selected automatically. With AWS_IAM_PROBE_ROLES, a role is only offered
+# when STS actually lets the user's token assume it.
+#
+# Servers use the role through their "Password exec command" setting, which
+# offers "AWS IAM (selected role)" and "AWS IAM: <label>" for each role. The
+# database user name of the server is the one the token is signed for, and
+# the server must use sslmode require, verify-ca or verify-full.
+#############################################################################
+AWS_IAM_ENABLED = False
+AWS_IAM_ROLES = []
+AWS_IAM_ROLE_CLAIM = None
+AWS_IAM_PROBE_ROLES = True
+# Require a role to be selected before the main window opens.
+AWS_IAM_REQUIRE_ROLE = True
+# Lifetime requested for the role session, in seconds (900 up to the role's
+# maximum session duration).
+AWS_IAM_SESSION_DURATION = 3600
+# Region of the STS endpoint used (None uses AWS_IAM_DEFAULT_REGION, and the
+# global endpoint if that is not set either), and the region used for
+# databases when neither the role nor the RDS host name says.
+AWS_IAM_STS_REGION = None
+AWS_IAM_DEFAULT_REGION = None
+# How long a generated RDS token is reused for new connections, in seconds.
+# RDS tokens are valid for 15 minutes.
+AWS_IAM_RDS_TOKEN_REUSE_SECONDS = 600
 
 #############################################################################
 # SERVER_MODE_ALLOWED_SERVICES lists the libpq service names that a server

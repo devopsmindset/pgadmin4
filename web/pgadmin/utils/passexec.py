@@ -61,10 +61,28 @@ def normalise_passexec_name(value, is_non_owner):
         if is_non_owner:
             return None
         raise ValueError('Inheriting is only available for shared servers.')
-    if not isinstance(value, str) or \
-            value not in get_server_passexec_commands():
-        raise ValueError('Unknown password exec command.')
-    return value
+    if is_known_passexec_name(value):
+        return value
+    raise ValueError('Unknown password exec command.')
+
+
+def is_known_passexec_name(value):
+    """True for the name of a configured command, or of a built-in AWS IAM
+    choice when AWS IAM authentication is enabled."""
+    from pgadmin.utils import aws_iam
+    if not isinstance(value, str):
+        return False
+    if aws_iam.is_builtin_name(value):
+        return aws_iam.is_enabled() and aws_iam.is_valid_builtin_name(value)
+    return value in get_server_passexec_commands()
+
+
+def get_server_passexec_choices():
+    """The password exec choices for the server dialog: the configured
+    command names, then the built-in AWS IAM choices as {value, label}."""
+    from pgadmin.utils import aws_iam
+    return sorted(get_server_passexec_commands()) + \
+        aws_iam.builtin_password_providers()
 
 
 def passexec_name_for_api(stored, is_non_owner):
@@ -187,6 +205,8 @@ def server_passexec_startup(app, cli_mode):
     if not config.SERVER_MODE:
         return
     check_server_passexec_config(app.logger)
+    from pgadmin.utils import aws_iam
+    aws_iam.check_config(app.logger)
     if not cli_mode:
         convert_legacy_server_passexec(app.logger)
 
@@ -405,8 +425,10 @@ def build_passexec(server):
             return None
         return PasswordExec(server.passexec_cmd, server.host, server.port,
                             server.username, server.passexec_expiration)
+    from pgadmin.utils import aws_iam
     commands = get_server_passexec_commands()
-    if not commands:
+    aws_iam_enabled = aws_iam.is_enabled()
+    if not commands and not aws_iam_enabled:
         return None
     if not current_user or not current_user.is_authenticated:
         return None
@@ -414,6 +436,15 @@ def build_passexec(server):
     if resolved is None:
         return None
     name, expiration, db_user = resolved
+    if aws_iam.is_builtin_name(name):
+        if not aws_iam_enabled or not aws_iam.is_valid_builtin_name(name):
+            current_app.logger.warning(
+                'Server %s uses AWS IAM authentication (%r), which is not '
+                'enabled or configured; ignoring it.', server.id, name)
+            return None
+        return aws_iam.AwsIamPassword(
+            name, server.host, server.port, db_user,
+            server.connection_params)
     argv = commands.get(name)
     if argv is None:
         current_app.logger.warning(

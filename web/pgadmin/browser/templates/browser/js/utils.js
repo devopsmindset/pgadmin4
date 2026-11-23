@@ -147,6 +147,18 @@ define('pgadmin.browser.utils',
           type: 'separator',
         },
         {% endif %}
+        {% if aws_iam_enabled %}
+        {
+          label: {{ (_('AWS role') ~ ': ' ~ (aws_iam_role.label if aws_iam_role else _('none selected')))|tojson }},
+          type: 'normal',
+          callback: ()=>{
+            window.location={{ url_for('aws_iam.role')|tojson }};
+          }
+        },
+        {
+          type: 'separator',
+        },
+        {% endif %}
         {% if is_admin %}
         {
           label: '{{ _('User Management') }}',

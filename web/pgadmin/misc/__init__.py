@@ -195,6 +195,9 @@ class MiscModule(PgAdminModule):
         from .bgprocess import blueprint as module
         self.submodules.append(module)
 
+        from .aws_iam import blueprint as module
+        self.submodules.append(module)
+
         from .cloud import blueprint as module
         self.submodules.append(module)
 

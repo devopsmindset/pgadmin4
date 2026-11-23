@@ -69,7 +69,8 @@ from pgadmin.utils.constants import MIMETYPE_APP_JS, PGADMIN_NODE, \
     VW_EDT_DEFAULT_PLACEHOLDER, NO_CACHE_CONTROL
 from pgadmin.authenticate import AuthSourceManager
 from pgadmin.utils.exception import CryptKeyMissing
-from pgadmin.utils.passexec import get_server_passexec_commands
+from pgadmin.utils.passexec import get_server_passexec_choices
+from pgadmin.utils import aws_iam
 
 from pgadmin.user_login_check import pga_login_required
 
@@ -406,6 +407,11 @@ def gravatar(identifier):
 def index():
     """Render and process the main browser window."""
 
+    # With AWS IAM authentication, the user picks the AWS role to work as
+    # before the main window opens (unless only one role is usable).
+    if aws_iam.selection_required():
+        return redirect(url_for('aws_iam.role'))
+
     # Check the browser is a supported version
     # NOTE: If the checks here are updated, make sure the supported versions
     # at https://www.pgadmin.org/faq/#11 are updated to match!
@@ -565,8 +571,11 @@ def utils():
             shared_storage_list=shared_storage_list,
             restricted_shared_storage_list=[] if current_user.has_role(
                 "Administrator") else restricted_shared_storage_list,
-            server_passexec_commands=sorted(get_server_passexec_commands())
+            server_passexec_commands=get_server_passexec_choices()
             if config.SERVER_MODE else [],
+            aws_iam_enabled=aws_iam.is_enabled(),
+            aws_iam_role=aws_iam.selected_role()
+            if aws_iam.is_enabled() else None,
             max_server_tags_allowed=config.MAX_SERVER_TAGS_ALLOWED,
             llm_enabled=is_llm_enabled(),
         ), 200)

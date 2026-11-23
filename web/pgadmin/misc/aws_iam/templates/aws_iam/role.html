@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ _('Choose an AWS role') }} - {{ config.APP_NAME }}</title>
+  <link rel="shortcut icon" href="{{ url_for('redirects.favicon') }}"/>
+  <style nonce="{{ csp_nonce }}">
+    :root { color-scheme: light dark; --accent: #326690; --muted: #6b7785;
+            --border: #d6dde5; --bg: #f4f6f8; --card: #ffffff; --err: #b3261e; }
+    @media (prefers-color-scheme: dark) {
+      :root { --border: #3a4350; --bg: #1e2329; --card: #262c33; --muted: #9aa5b1; }
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: Roboto, "Segoe UI", Helvetica, Arial, sans-serif;
+           background: var(--bg); color: inherit; font-size: 14px; }
+    main { max-width: 760px; margin: 48px auto; padding: 0 16px; }
+    h1 { font-size: 20px; margin: 0 0 4px; }
+    .sub { color: var(--muted); margin: 0 0 20px; }
+    .banner { border: 1px solid var(--err); color: var(--err); border-radius: 6px;
+              padding: 10px 12px; margin-bottom: 16px; }
+    .note { border: 1px solid var(--border); border-radius: 6px; padding: 12px;
+            margin-bottom: 16px; background: var(--card); }
+    input[type=search] { width: 100%; padding: 9px 12px; border: 1px solid var(--border);
+                         border-radius: 6px; margin-bottom: 12px; font-size: 14px;
+                         background: var(--card); color: inherit; }
+    .role { display: flex; gap: 12px; align-items: center; justify-content: space-between;
+            background: var(--card); border: 1px solid var(--border); border-radius: 8px;
+            padding: 12px 14px; margin-bottom: 8px; }
+    .role.current { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+    .role.refused { opacity: .65; }
+    .role .label { font-weight: 600; }
+    .role .meta { color: var(--muted); font-size: 12px; margin-top: 2px; }
+    .role .why { color: var(--err); font-size: 12px; margin-top: 4px; }
+    .badge { font-size: 11px; border: 1px solid var(--accent); color: var(--accent);
+             border-radius: 10px; padding: 1px 8px; margin-left: 6px; }
+    button, .link { font-size: 14px; border-radius: 6px; padding: 7px 14px; cursor: pointer; }
+    button { background: var(--accent); color: #fff; border: 1px solid var(--accent); }
+    button:disabled { background: transparent; color: var(--muted); border-color: var(--border);
+                      cursor: default; }
+    .actions { display: flex; justify-content: space-between; margin-top: 20px; }
+    .link { color: var(--accent); text-decoration: none; border: 1px solid transparent; }
+    .hidden { display: none; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>{{ _('Choose an AWS role') }}</h1>
+  <p class="sub">{{ _('Signed in as %(user)s. Databases set to use "AWS IAM (selected role)" connect with this role.', user=username) }}</p>
+
+  {% if error %}<div class="banner" role="alert">{{ error }}</div>{% endif %}
+
+  {% if not roles %}
+    <div class="note">{{ _('No AWS role is configured for your login. Ask your pgAdmin administrator for access.') }}</div>
+  {% elif usable == 0 %}
+    <div class="note">{{ _('None of the AWS roles can be used with your login at the moment. The reason is shown under each role.') }}</div>
+  {% endif %}
+
+  {% if roles|length > 5 %}
+  <input type="search" id="filter" placeholder="{{ _('Filter by name, account or role') }}" aria-label="{{ _('Filter roles') }}" autofocus>
+  {% endif %}
+
+  <div id="roles">
+  {% for role in roles %}
+    <form method="post" action="{{ url_for('aws_iam.select') }}"
+          class="role{% if role.selected %} current{% endif %}{% if role.error %} refused{% endif %}"
+          data-search="{{ (role.label ~ ' ' ~ role.description ~ ' ' ~ role.account ~ ' ' ~ role.name)|lower }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="role_id" value="{{ role.id }}">
+      <div>
+        <div class="label">{{ role.label }}{% if role.selected %}<span class="badge">{{ _('current') }}</span>{% endif %}</div>
+        {% if role.description %}<div class="meta">{{ role.description }}</div>{% endif %}
+        <div class="meta">{{ _('Account') }} {{ role.account }} &middot; {{ role.name }}{% if role.expires %} &middot; {{ _('credentials until %(t)s', t=role.expires) }}{% endif %}</div>
+        {% if role.error %}<div class="why">{{ role.error }}</div>{% endif %}
+      </div>
+      <button type="submit" {% if role.error %}disabled{% endif %}>
+        {% if role.selected %}{{ _('Renew') }}{% else %}{{ _('Use this role') }}{% endif %}
+      </button>
+    </form>
+  {% endfor %}
+  </div>
+
+  <div class="actions">
+    <a class="link" href="{{ logout_url }}">{{ _('Log out') }}</a>
+    {% if selected %}<a class="link" href="{{ browser_url }}">{{ _('Continue as %(r)s', r=selected.label) }} &rarr;</a>{% endif %}
+  </div>
+</main>
+{% if roles|length > 5 %}
+<script nonce="{{ csp_nonce }}">
+  document.getElementById('filter').addEventListener('input', function (e) {
+    var q = e.target.value.trim().toLowerCase();
+    document.querySelectorAll('#roles .role').forEach(function (el) {
+      el.classList.toggle('hidden', q !== '' && el.dataset.search.indexOf(q) === -1);
+    });
+  });
+</script>
+{% endif %}
+</body>
+</html>
