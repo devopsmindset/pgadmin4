@@ -576,6 +576,7 @@ def utils():
             aws_iam_enabled=aws_iam.is_enabled(),
             aws_iam_role=aws_iam.selected_role()
             if aws_iam.is_enabled() else None,
+            aws_iam_switch=aws_iam.role_switch_allowed(),
             max_server_tags_allowed=config.MAX_SERVER_TAGS_ALLOWED,
             llm_enabled=is_llm_enabled(),
         ), 200)

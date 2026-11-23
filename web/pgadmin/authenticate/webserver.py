@@ -13,6 +13,7 @@ import hmac
 import ipaddress
 import secrets
 import string
+import threading
 import config
 from flask import request, current_app, session, Response, render_template, \
     url_for
@@ -205,12 +206,36 @@ def _get_jwt_identity():
     return username, claims
 
 
+_rejections_lock = threading.Lock()
+_last_rejection = {}
+
+
+def _warn_rejection_once(username, reason):
+    """Log why a session's token was refused, once per session and reason,
+    so that a proxy sending bad or anonymous tokens shows up in the log
+    without flooding it."""
+    key = getattr(session, 'sid', None)
+    with _rejections_lock:
+        if _last_rejection.get(key) == reason:
+            return
+        if len(_last_rejection) > 10000:
+            _last_rejection.clear()
+        _last_rejection[key] = reason
+    current_app.logger.warning(
+        "Webserver auth: ignoring the identity token sent for the session "
+        "of {0} ({1}); keeping the session and its last valid "
+        "token.".format(username, reason))
+
+
 def _sync_jwt_session():
     """Before each request of a JWT-authenticated session, check the token
-    the proxy sends now. A token for someone else, or an invalid one, logs
-    the session out (the request then continues unauthenticated and gets
-    the usual login redirect or 401); a valid one replaces the remembered
-    token, so the one exchanged for AWS credentials is always fresh."""
+    the proxy sends now. A valid token for someone else logs the session
+    out (the request then continues unauthenticated and gets the usual
+    login redirect or 401); a valid one for the same user replaces the
+    remembered token, so the one exchanged for AWS credentials is always
+    fresh. A missing, invalid or anonymous token is ignored: it proves
+    nothing about who is using the session, and the session cookie, not
+    this header, is what authenticates it."""
     if not config.SERVER_MODE or not jwt_mode_enabled():
         return
     endpoint = request.endpoint or ''
@@ -224,21 +249,15 @@ def _sync_jwt_session():
     try:
         identity = identity_from_request()
     except JWTIdentityError as e:
-        current_app.logger.info(
-            "Webserver auth: the identity token of the session of {0} is "
-            "invalid ({1}); logging the session out.".format(
-                current_user.username, e))
-        identity = False
-    if identity is None:
-        # Nothing sent with this request: keep the session; the remembered
-        # token simply ages out.
+        _warn_rejection_once(current_user.username, str(e))
         return
-    if identity is False or identity[0] != current_user.username:
-        if identity:
-            current_app.logger.warning(
-                "Webserver auth: the proxy now asserts {0} for the session "
-                "of {1}; logging the session out.".format(
-                    identity[0], current_user.username))
+    if identity is None:
+        return
+    if identity[0] != current_user.username:
+        current_app.logger.warning(
+            "Webserver auth: the proxy now asserts {0} for the session "
+            "of {1}; logging the session out.".format(
+                identity[0], current_user.username))
         forget_token()
         session.pop(AWS_IAM_ROLE_SESSION_KEY, None)
         logout_user()

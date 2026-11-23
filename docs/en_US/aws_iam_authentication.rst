@@ -80,39 +80,57 @@ Roles and the role selector
 
    "AWS_IAM_ENABLED", "Enables AWS IAM database authentication."
    "AWS_IAM_ROLES", "The roles users may pick: a list of dicts with *id*,
-   *arn*, and optionally *label*, *description*, *region* and
-   *claim_values*."
+   *arn*, and optionally *label*, *description*, *region*, *claim_values* and
+   *db_user*."
    "AWS_IAM_ROLE_CLAIM", "A token claim (string or list) whose values gate the
    roles that have *claim_values*, e.g. a groups claim."
    "AWS_IAM_PROBE_ROLES", "Only offer a role when STS lets the user's token
    assume it. The reason STS refused is shown in the selector."
    "AWS_IAM_REQUIRE_ROLE", "Ask for a role before the main window opens.
-   With a single usable role, it is selected automatically."
+   With a single usable role, it is chosen automatically."
+   "AWS_IAM_SESSION_ROLE_ONLY", "Every AWS IAM server uses the session's
+   role (the default). When *False*, servers may also be set to always use a
+   given role."
+   "AWS_IAM_ALLOW_ROLE_SWITCH", "Let users switch the session's role from the
+   user menu. When *False*, they log out and in again to change it."
    "AWS_IAM_SESSION_DURATION", "The requested role session length in
    seconds."
    "AWS_IAM_STS_REGION, AWS_IAM_DEFAULT_REGION", "The STS endpoint region,
    and the database region when the role and the RDS host name do not say."
 
-After login, a user with several usable roles chooses one in the role
-selector, which also shows the account, the role name and when the current
-credentials expire. It is reachable at any time from the *AWS role* entry of
-the user menu; switching roles closes the connections that use the selected
-role, so that they reconnect as the new one.
+The role of the session
+***********************
+
+The whole pgAdmin session works as one AWS role. After login, a user with
+several usable roles chooses one in the role selector, which shows the
+account, the role name, the database user it connects as and when the
+current credentials expire; with a single usable role there is nothing to
+choose. The role is shown next to the user name in the top right corner, and
+the user menu leads back to the selector. Switching closes the database
+connections made with the previous role, so that they reconnect as the new
+one.
+
+A role can name the database user it connects as with *db_user*, which then
+replaces the server's *Username*. This is what makes one server entry usable
+read-only or read-write depending on the role chosen at login: give the
+read-only role ``'db_user': 'app_ro'`` and the read-write role
+``'db_user': 'app_rw'``. *db_user* may contain ``{username}`` (the pgAdmin
+user name) and ``{local_username}`` (the part before the ``@``), for
+databases with a user per person.
 
 Configuring a server
 ********************
 
-On the *Advanced* tab of the server dialog, set *Password exec command* to:
+On the *Advanced* tab of the server dialog, set *Password exec command* to
+*AWS IAM (session role)*. With ``AWS_IAM_SESSION_ROLE_ONLY = False``, *AWS IAM:
+<role>* is offered too, to make a server always use that role whatever the
+session's role.
 
-* *AWS IAM (selected role)* to connect as the role chosen in the selector,
-  or
-* *AWS IAM: <role>* to always use that role, for example for a server that
-  should only ever be used read-only.
-
-Set the *Username* to the database user the token is signed for, and the
-*SSL mode* to *require*, *verify-ca* or *verify-full*: pgAdmin refuses to send
-an IAM token over a connection without SSL. Tokens are generated for each new
-connection and reused for up to ``AWS_IAM_RDS_TOKEN_REUSE_SECONDS``.
+Set the *Username* to the database user the token is signed for (unless the
+role has a *db_user*), and the *SSL mode* to *require*, *verify-ca* or
+*verify-full*: pgAdmin refuses to send an IAM token over a connection without
+SSL. Tokens are generated for each new connection and reused for up to
+``AWS_IAM_RDS_TOKEN_REUSE_SECONDS``.
 
 Example
 *******
@@ -135,8 +153,8 @@ with group names in the *amr* claim:
     AWS_IAM_ROLES = [
         {'id': 'billing-ro', 'label': 'Billing (read only)',
          'arn': 'arn:aws:iam::111111111111:role/billing-db-ro',
-         'claim_values': ['billing-developers']},
+         'claim_values': ['billing-developers'], 'db_user': 'app_ro'},
         {'id': 'billing-rw', 'label': 'Billing (read/write)',
          'arn': 'arn:aws:iam::111111111111:role/billing-db-rw',
-         'claim_values': ['billing-admins']},
+         'claim_values': ['billing-admins'], 'db_user': 'app_rw'},
     ]

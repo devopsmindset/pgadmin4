@@ -1228,30 +1228,47 @@ SERVER_PASSEXEC_ENV_PASSTHROUGH = []
 #   'region'       optional default AWS region for databases used with it
 #   'claim_values' optional list: the role is only offered when the token
 #                  claim named by AWS_IAM_ROLE_CLAIM contains one of these
+#   'db_user'      optional database user the role connects as, replacing
+#                  the server's user name; may contain {username} (the
+#                  pgAdmin user name) or {local_username} (before the '@')
 #
-# e.g.
+# e.g. one server entry per database, used read-only or read-write
+# depending on the role chosen at login:
 #   AWS_IAM_ROLES = [
 #       {'id': 'billing-ro', 'label': 'Billing (read only)',
 #        'arn': 'arn:aws:iam::111111111111:role/billing-db-ro',
-#        'claim_values': ['billing-readers']},
+#        'claim_values': ['billing-readers'], 'db_user': 'app_ro'},
+#       {'id': 'billing-rw', 'label': 'Billing (read/write)',
+#        'arn': 'arn:aws:iam::111111111111:role/billing-db-rw',
+#        'claim_values': ['billing-writers'], 'db_user': 'app_rw'},
 #   ]
 #
-# After login, a user with more than one usable role picks one in the role
-# selector (also reachable from the user menu); with exactly one it is
-# selected automatically. With AWS_IAM_PROBE_ROLES, a role is only offered
-# when STS actually lets the user's token assume it.
+# The whole pgAdmin session works as one role. After login, a user with
+# more than one usable role chooses it in the role selector; with exactly
+# one it is chosen automatically. With AWS_IAM_PROBE_ROLES, a role is only
+# offered when STS actually lets the user's token assume it. The role is
+# shown next to the user name, and the user menu leads back to the
+# selector: switching (unless AWS_IAM_ALLOW_ROLE_SWITCH is False, when the
+# user logs out to change it) closes the connections made with the old
+# role.
 #
-# Servers use the role through their "Password exec command" setting, which
-# offers "AWS IAM (selected role)" and "AWS IAM: <label>" for each role. The
-# database user name of the server is the one the token is signed for, and
-# the server must use sslmode require, verify-ca or verify-full.
+# Servers use the role through their "Password exec command" setting:
+# "AWS IAM (session role)". Unless AWS_IAM_SESSION_ROLE_ONLY is True (the
+# default), "AWS IAM: <label>" is also offered for each role, to make a
+# server always use that role whatever the session's role is. The token is
+# signed for the role's db_user, or else the server's user name, and the
+# server must use sslmode require, verify-ca or verify-full.
 #############################################################################
 AWS_IAM_ENABLED = False
 AWS_IAM_ROLES = []
 AWS_IAM_ROLE_CLAIM = None
 AWS_IAM_PROBE_ROLES = True
-# Require a role to be selected before the main window opens.
+# Require a role to be chosen before the main window opens.
 AWS_IAM_REQUIRE_ROLE = True
+# Every AWS IAM server uses the session's role; no per-server roles.
+AWS_IAM_SESSION_ROLE_ONLY = True
+# Let users switch the session's role without logging out.
+AWS_IAM_ALLOW_ROLE_SWITCH = True
 # Lifetime requested for the role session, in seconds (900 up to the role's
 # maximum session duration).
 AWS_IAM_SESSION_DURATION = 3600

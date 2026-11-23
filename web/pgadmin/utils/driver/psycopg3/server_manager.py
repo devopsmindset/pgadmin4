@@ -65,6 +65,25 @@ class ServerManager(object):
 
         self.update(server)
 
+    @property
+    def user(self):
+        """The database user to connect as. This is the server's user name,
+        unless AWS IAM authentication gives the role chosen for the session
+        a database user of its own (see AwsIamPassword.db_user)."""
+        provider = getattr(self, 'passexec', None)
+        db_user = getattr(provider, 'db_user', None)
+        override = db_user() if callable(db_user) else None
+        return override or self._user
+
+    @user.setter
+    def user(self, value):
+        self._user = value
+
+    @property
+    def configured_user(self):
+        """The server's own user name, whatever user it connects as."""
+        return self._user
+
     def update(self, server):
         assert (server is not None)
         assert (isinstance(server, Server))
@@ -174,7 +193,9 @@ class ServerManager(object):
         res['host'] = self.host
         res['port'] = self.port
         res['db'] = self.db
-        res['user'] = self.user
+        # The server's own user name, which Driver._saved_state_is_stale
+        # compares with the Server row; not a role's database user.
+        res['user'] = self.configured_user
         res['service'] = self.service
         res['tunnel_host'] = self.tunnel_host
         res['pga_user'] = self.pga_user

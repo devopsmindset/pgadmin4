@@ -116,7 +116,9 @@ define('pgadmin.browser.utils',
     {% if current_app.config.get('SERVER_MODE') %}
     userMenuInfo: {
       username: '{{username}}',
-      auth_source: '{{auth_source}}',
+      {# With AWS IAM authentication, the session's role is shown next to
+         the user name instead of the authentication source. #}
+      auth_source: {% if aws_iam_role %}{{ ('AWS: ' ~ aws_iam_role.label)|tojson }}{% else %}'{{auth_source}}'{% endif %},
       gravatar: {% if config.SHOW_GRAVATAR_IMAGE %}'{{ gravatar_identifier | gravatar }}'{% else %}''{% endif %},
       menus: [
         {% if auth_only_internal %}
@@ -149,7 +151,7 @@ define('pgadmin.browser.utils',
         {% endif %}
         {% if aws_iam_enabled %}
         {
-          label: {{ (_('AWS role') ~ ': ' ~ (aws_iam_role.label if aws_iam_role else _('none selected')))|tojson }},
+          label: {{ ((_('Switch AWS role') if aws_iam_switch else _('AWS role')) ~ ' (' ~ (aws_iam_role.label if aws_iam_role else _('none chosen')) ~ ')')|tojson }},
           type: 'normal',
           callback: ()=>{
             window.location={{ url_for('aws_iam.role')|tojson }};

@@ -45,10 +45,11 @@
 </head>
 <body>
 <main>
-  <h1>{{ _('Choose an AWS role') }}</h1>
-  <p class="sub">{{ _('Signed in as %(user)s. Databases set to use "AWS IAM (selected role)" connect with this role.', user=username) }}</p>
+  <h1>{{ _('Choose the AWS role for this session') }}</h1>
+  <p class="sub">{{ _('Signed in as %(user)s. Every AWS IAM database you open in this session connects with the role you choose here.', user=username) }}</p>
 
   {% if error %}<div class="banner" role="alert">{{ error }}</div>{% endif %}
+  {% if locked %}<div class="note">{{ _('The role is chosen once per session. Log out and in again to use another one.') }}</div>{% elif selected %}<div class="note">{{ _('Switching role closes the database connections made with the current one.') }}</div>{% endif %}
 
   {% if not roles %}
     <div class="note">{{ _('No AWS role is configured for your login. Ask your pgAdmin administrator for access.') }}</div>
@@ -70,10 +71,10 @@
       <div>
         <div class="label">{{ role.label }}{% if role.selected %}<span class="badge">{{ _('current') }}</span>{% endif %}</div>
         {% if role.description %}<div class="meta">{{ role.description }}</div>{% endif %}
-        <div class="meta">{{ _('Account') }} {{ role.account }} &middot; {{ role.name }}{% if role.expires %} &middot; {{ _('credentials until %(t)s', t=role.expires) }}{% endif %}</div>
+        <div class="meta">{{ _('Account') }} {{ role.account }} &middot; {{ role.name }}{% if role.db_user %} &middot; {{ _('connects as %(u)s', u=role.db_user) }}{% endif %}{% if role.expires %} &middot; {{ _('credentials until %(t)s', t=role.expires) }}{% endif %}</div>
         {% if role.error %}<div class="why">{{ role.error }}</div>{% endif %}
       </div>
-      <button type="submit" {% if role.error %}disabled{% endif %}>
+      <button type="submit" {% if role.error or role.locked %}disabled{% endif %}>
         {% if role.selected %}{{ _('Renew') }}{% else %}{{ _('Use this role') }}{% endif %}
       </button>
     </form>

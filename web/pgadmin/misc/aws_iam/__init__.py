@@ -46,16 +46,20 @@ def _render(error=None, status=200):
     except aws_iam.AwsIamError as e:
         identity_error = str(e)
     selected = aws_iam.selected_role()
+    locked = bool(selected) and not aws_iam.role_switch_allowed()
     entries = []
     for role, refusal in roles:
+        is_selected = bool(selected and selected['id'] == role['id'])
         entries.append({
             'id': role['id'],
             'label': role['label'],
             'description': role['description'],
             'account': role['account'],
             'name': role['name'],
+            'db_user': aws_iam.role_db_user(role, current_user.username),
             'error': refusal,
-            'selected': bool(selected and selected['id'] == role['id']),
+            'selected': is_selected,
+            'locked': locked and not is_selected,
             'expires': _expiry_text(aws_iam.credentials_info(role))
             if not refusal else None,
         })
@@ -65,6 +69,7 @@ def _render(error=None, status=200):
         roles=entries,
         usable=sum(1 for e in entries if not e['error']),
         selected=selected,
+        locked=locked,
         error=error or identity_error,
         browser_url=url_for('browser.index'),
         logout_url=get_logout_url(),

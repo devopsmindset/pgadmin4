@@ -17,11 +17,17 @@ tokens. pgAdmin needs no AWS credentials of its own: STS decides, from the
 role's trust policy, whether the user may use a role, and the role's
 permissions decide which database users it can sign for.
 
-Servers use this through their password exec setting, which offers two
-kinds of built-in value besides the administrator's commands:
+Servers use this through their password exec setting, which offers
+built-in values besides the administrator's commands:
 
-  __aws_iam__            the role the user selected (see the role selector)
-  __aws_iam__:<role id>  always that role
+  __aws_iam__            the role chosen for the session (role selector)
+  __aws_iam__:<role id>  always that role (not offered with
+                         AWS_IAM_SESSION_ROLE_ONLY, where every server uses
+                         the session's role)
+
+A role may name the database user it connects as ('db_user'), which then
+replaces the server's user name, so that one server entry is used read-only
+or read-write depending on the role chosen for the session.
 
 Temporary credentials and tokens are kept in memory only.
 """
@@ -87,6 +93,10 @@ def _iter_role_entries():
             claim_values = [claim_values]
         claim_values = [v for v in (claim_values or [])
                         if isinstance(v, str) and v]
+        db_user = entry.get('db_user') or None
+        if db_user is not None and not _valid_db_user_template(db_user):
+            yield None, 'invalid db_user for {0!r}'.format(role_id)
+            continue
         seen.add(role_id)
         yield {
             'id': role_id,
@@ -97,7 +107,32 @@ def _iter_role_entries():
             'description': entry.get('description') or '',
             'region': entry.get('region') or None,
             'claim_values': claim_values,
+            'db_user': db_user,
         }, None
+
+
+def _format_db_user(template, username):
+    username = username or ''
+    return template.format(username=username,
+                           local_username=username.split('@')[0])
+
+
+def _valid_db_user_template(template):
+    if not isinstance(template, str) or not template.strip():
+        return False
+    try:
+        return bool(_format_db_user(template, 'user@example.com'))
+    except (KeyError, IndexError, ValueError):
+        return False
+
+
+def role_db_user(role, username):
+    """The database user a role connects as, or None when it uses the
+    server's own user name. 'db_user' may contain {username} (the pgAdmin
+    user name) and {local_username} (the part before '@')."""
+    if not role or not role.get('db_user'):
+        return None
+    return _format_db_user(role['db_user'], username)
 
 
 def configured_roles():
@@ -133,16 +168,38 @@ def find_role(role_id):
     return None
 
 
+def session_role_only():
+    """With AWS_IAM_SESSION_ROLE_ONLY, every AWS IAM server uses the role
+    chosen for the session; servers cannot name a role of their own."""
+    return bool(getattr(config, 'AWS_IAM_SESSION_ROLE_ONLY', True))
+
+
+def role_switch_allowed():
+    return bool(getattr(config, 'AWS_IAM_ALLOW_ROLE_SWITCH', True))
+
+
 def is_builtin_name(name):
     return isinstance(name, str) and (
         name == SESSION_ROLE_NAME or name.startswith(PINNED_ROLE_PREFIX))
 
 
 def is_valid_builtin_name(name):
+    """True when a stored built-in value can be used. In session-role-only
+    mode, a value naming a role (saved before the mode was turned on) is
+    used as the session role."""
     if name == SESSION_ROLE_NAME:
         return True
-    return is_builtin_name(name) and \
+    if not is_builtin_name(name):
+        return False
+    return session_role_only() or \
         find_role(name[len(PINNED_ROLE_PREFIX):]) is not None
+
+
+def is_selectable_builtin_name(name):
+    """True when a built-in value may be saved on a server now."""
+    if session_role_only():
+        return name == SESSION_ROLE_NAME
+    return is_valid_builtin_name(name)
 
 
 def builtin_password_providers():
@@ -150,7 +207,9 @@ def builtin_password_providers():
     if not is_enabled():
         return []
     choices = [{'value': SESSION_ROLE_NAME,
-                'label': gettext('AWS IAM (selected role)')}]
+                'label': gettext('AWS IAM (session role)')}]
+    if session_role_only():
+        return choices
     for role in configured_roles():
         choices.append({'value': PINNED_ROLE_PREFIX + role['id'],
                         'label': gettext('AWS IAM: {0}').format(
@@ -376,12 +435,16 @@ def select_role(role_id):
     """Make role_id the session's role, after checking it is offered to the
     user and that STS lets the user assume it. Connections that follow the
     selected role are closed when it changes."""
+    previous = session.get(SESSION_KEY)
+    if previous and previous != role_id and not role_switch_allowed():
+        raise AwsIamError(gettext(
+            'The AWS role is chosen once per session. Log out and in again '
+            'to use another role.'))
     role = find_role(role_id)
     _token, claims = web_identity()
     if role is None or role not in candidate_roles(claims):
         raise AwsIamError(gettext('That role is not available to you.'))
     role_credentials(role)
-    previous = session.get(SESSION_KEY)
     session[SESSION_KEY] = role['id']
     if previous and previous != role['id']:
         release_selected_role_connections()
@@ -468,7 +531,8 @@ class AwsIamPassword:
     def __init__(self, name, host, port, username, connection_params=None):
         self.name = name
         self.pinned_role_id = name[len(PINNED_ROLE_PREFIX):] \
-            if name.startswith(PINNED_ROLE_PREFIX) else None
+            if name.startswith(PINNED_ROLE_PREFIX) and \
+            not session_role_only() else None
         self.host = host
         self.port = port
         self.username = username
@@ -488,8 +552,8 @@ class AwsIamPassword:
         role = selected_role()
         if role is None:
             raise AwsIamError(gettext(
-                'No AWS role is selected. Choose one from the user menu '
-                '(AWS role).'))
+                'No AWS role is chosen for this session. Choose one from '
+                'the user menu (AWS role).'))
         return role
 
     def invalidate(self):
@@ -497,20 +561,32 @@ class AwsIamPassword:
             self._token = None
             self._token_key = None
 
+    def db_user(self):
+        """The database user the role connects as instead of the server's
+        user name, or None. ServerManager.user asks this for every new
+        connection, so a role switch changes the user too. Outside a
+        request, or without a usable role, the server's user applies."""
+        try:
+            return role_db_user(self.role(), current_user.username)
+        except (AwsIamError, RuntimeError, AttributeError):
+            return None
+
     def get(self):
         if not self.host:
             raise AwsIamError(gettext(
                 'AWS IAM authentication needs the server host name.'))
-        if not self.username:
-            raise AwsIamError(gettext(
-                'AWS IAM authentication needs the database user name.'))
         if self.sslmode not in SECURE_SSLMODES:
             raise AwsIamError(gettext(
                 'AWS IAM authentication needs SSL: set the SSL mode of the '
                 'server to require, verify-ca or verify-full.'))
         role = self.role()
+        username = role_db_user(role, current_user.username) or \
+            self.username
+        if not username:
+            raise AwsIamError(gettext(
+                'AWS IAM authentication needs the database user name.'))
         region = region_for(self.host, role)
-        key = (current_user.username, role['id'], region)
+        key = (current_user.username, role['id'], region, username)
         reuse = getattr(config, 'AWS_IAM_RDS_TOKEN_REUSE_SECONDS', 600)
         with self.lock:
             now = time.monotonic()
@@ -519,6 +595,6 @@ class AwsIamPassword:
                 return self._token
             credentials = role_credentials(role)
             token = generate_rds_token(credentials, self.host, self.port,
-                                       self.username, region)
+                                       username, region)
             self._token, self._token_key, self._token_at = token, key, now
             return token

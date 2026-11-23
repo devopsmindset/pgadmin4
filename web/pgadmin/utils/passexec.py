@@ -73,7 +73,8 @@ def is_known_passexec_name(value):
     if not isinstance(value, str):
         return False
     if aws_iam.is_builtin_name(value):
-        return aws_iam.is_enabled() and aws_iam.is_valid_builtin_name(value)
+        return aws_iam.is_enabled() and \
+            aws_iam.is_selectable_builtin_name(value)
     return value in get_server_passexec_commands()
 
 
