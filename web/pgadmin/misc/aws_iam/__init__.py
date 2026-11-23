@@ -20,6 +20,7 @@ from pgadmin.authenticate import get_logout_url
 from pgadmin.user_login_check import pga_login_required
 from pgadmin.utils import PgAdminModule, aws_iam
 from pgadmin.utils.ajax import make_json_response
+from pgadmin.utils.csrf import pgCSRFProtect
 
 MODULE_NAME = 'aws_iam'
 
@@ -77,6 +78,11 @@ def _render(error=None, status=200):
 
 
 @blueprint.route('/role', methods=['GET'], endpoint='role')
+# pgAdmin checks CSRF on GET as well, and this page is opened by browser
+# navigation (the redirect from the main window, the user menu), which
+# sends no CSRF header; like browser.index, it is exempt. Choosing a role
+# (POST) is still checked, with the token in the form.
+@pgCSRFProtect.exempt
 @pga_login_required
 def role_page():
     if not aws_iam.is_enabled():

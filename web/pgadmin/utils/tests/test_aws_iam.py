@@ -354,6 +354,20 @@ class TestBuildPasswordExecReturnsAwsProvider(_AwsTestCase, BaseTestGenerator):
         self.assertIsNone(provider.pinned_role_id)
 
 
+class TestRolePageIsCsrfExempt(_AwsTestCase, BaseTestGenerator):
+    """pgAdmin checks CSRF on GET too, and the role selector is opened by
+    browser navigation, which sends no CSRF header. Choosing a role (POST)
+    must stay protected."""
+    scenarios = [('default', dict())]
+
+    def runTest(self):
+        import pgadmin.misc.aws_iam  # noqa: registers the views
+        from pgadmin.utils.csrf import pgCSRFProtect
+        exempt = pgCSRFProtect._exempt_views
+        self.assertIn('pgadmin.misc.aws_iam.role_page', exempt)
+        self.assertNotIn('pgadmin.misc.aws_iam.role_select', exempt)
+
+
 class TestInvalidDbUserTemplateIsRefused(_AwsTestCase,
                                          BaseTestGenerator):
     scenarios = [('default', dict())]
