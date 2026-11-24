@@ -354,6 +354,31 @@ class TestBuildPasswordExecReturnsAwsProvider(_AwsTestCase, BaseTestGenerator):
         self.assertIsNone(provider.pinned_role_id)
 
 
+class TestConnectErrorReplacesThePasswordPrompt(
+        _AwsTestCase, BaseTestGenerator):
+    """A failed AWS IAM connection is reported with a hint naming the
+    database user and role, instead of a pointless password prompt."""
+    scenarios = [('default', dict())]
+
+    def runTest(self):
+        manager = SimpleNamespace(passexec=aws_iam.AwsIamPassword(
+            aws_iam.SESSION_ROLE_NAME, RDS_HOST, 5432, 'server_user',
+            {'sslmode': 'require'}))
+        # Not an AWS IAM server: keep pgAdmin's usual handling.
+        self.assertIsNone(aws_iam.connect_error_message(
+            SimpleNamespace(passexec=None), 'boom'))
+        # No role chosen: the error already says what to do.
+        self.assertEqual(aws_iam.connect_error_message(manager, 'no role'),
+                         'no role')
+        aws_iam.select_role('billing-ro')
+        message = aws_iam.connect_error_message(
+            manager, 'FATAL:  Role "jdoe_ro" does not exist.')
+        self.assertTrue(message.startswith('FATAL:  Role "jdoe_ro"'))
+        self.assertIn('"jdoe_ro"', message.split('\n\n')[1])
+        self.assertIn('Billing (read only)', message)
+        self.assertIn('rds_iam', message)
+
+
 class TestRolePageIsCsrfExempt(_AwsTestCase, BaseTestGenerator):
     """pgAdmin checks CSRF on GET too, and the role selector is opened by
     browser navigation, which sends no CSRF header. Choosing a role (POST)

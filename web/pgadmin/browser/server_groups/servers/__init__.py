@@ -30,6 +30,7 @@ import config
 from config import PG_DEFAULT_DRIVER
 from pgadmin.model import db, Server, ServerGroup, User, SharedServer
 from pgadmin.utils.driver import get_driver
+from pgadmin.utils import aws_iam
 from pgadmin.utils.passexec import normalise_passexec_name, \
     passexec_name_for_api, PASSEXEC_INHERIT
 from pgadmin.utils.master_password import get_crypt_key
@@ -1940,6 +1941,12 @@ class ServerNode(PGChildNodeView):
                 server_types=ServerType.types()
             )
         except Exception as e:
+            aws_error = aws_iam.connect_error_message(
+                manager, getattr(e, 'message', str(e)))
+            if aws_error and not prompt_tunnel_password:
+                # A password prompt is pointless with AWS IAM
+                # authentication: show what went wrong instead.
+                return internal_server_error(aws_error)
             return self.get_response_for_password(
                 server, 401, not server.save_password, prompt_tunnel_password,
                 getattr(e, 'message', str(e)))
@@ -1951,6 +1958,10 @@ class ServerNode(PGChildNodeView):
             )
             if errmsg.find('Ticket expired') != -1:
                 return internal_server_error(errmsg)
+
+            aws_error = aws_iam.connect_error_message(manager, errmsg)
+            if aws_error and not prompt_tunnel_password:
+                return internal_server_error(aws_error)
 
             return self.get_response_for_password(
                 server, 401, not server.save_password,

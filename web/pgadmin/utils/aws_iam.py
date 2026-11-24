@@ -522,6 +522,28 @@ def generate_rds_token(credentials, host, port, username, region):
         Region=region)
 
 
+def connect_error_message(manager, errmsg):
+    """For a server using AWS IAM authentication, the connection error to
+    show instead of a password prompt (which cannot help: the password is
+    an IAM token), with a hint saying which database user and role were
+    used. None for any other server."""
+    provider = getattr(manager, 'passexec', None)
+    if not isinstance(provider, AwsIamPassword):
+        return None
+    try:
+        role = provider.role()
+    except (AwsIamError, RuntimeError):
+        # No role: the error already says so.
+        return errmsg
+    db_user = role_db_user(role, current_user.username) or provider.username
+    hint = gettext(
+        'AWS IAM authentication tried to connect as the database user "{0}" '
+        'with the AWS role "{1}" ({2}). Check that this database user '
+        'exists and is granted rds_iam, and that the role is allowed '
+        'rds-db:connect as it.').format(db_user, role['label'], role['arn'])
+    return '{0}\n\n{1}'.format(errmsg, hint) if errmsg else hint
+
+
 class AwsIamPassword:
     """Takes the place of a password exec command for a server
     (ServerManager.passexec): get() returns an RDS IAM token for the
